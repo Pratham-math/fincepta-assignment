@@ -542,112 +542,6 @@ def _check_outdated(
     )
 
 
-def _check_contradicted(
-    statement: str,
-    evidence_list: list[Evidence],
-    current_explanation: str,
-) -> tuple[Verdict, str | None]:
-    """
-    Fix 1: Numeric CONTRADICTED post-processor.
-
-    If the LLM returned SUPPORTED but the statement contains a specific
-    financial figure that doesn't match any figure in the evidence passage,
-    upgrade to CONTRADICTED.
-
-    Only triggers when:
-    - The statement has at least one figure (e.g. "$3.06 billion")
-    - The evidence passage has at least one figure
-    - No statement figure matches any evidence figure within tolerance
-    """
-    stmt_figures = extract_figures_from_text(statement)
-    if not stmt_figures:
-        return Verdict.SUPPORTED, None
-
-    # Collect all figures from evidence passages, including thousands-normalized
-    from src.numeric import normalize_to_dollars
-    ev_figures_all = []
-    for ev in evidence_list:
-        raw_figs = extract_figures_from_text(ev.passage)
-        for ef in raw_figs:
-            ev_figures_all.append(ef)
-            # Also add thousands-normalized version
-            ev_figures_all.append({
-                **ef,
-                "value": normalize_to_dollars(ef["value"], "thousands"),
-            })
-
-    if not ev_figures_all:
-        return Verdict.SUPPORTED, None
-
-    # Check if ANY statement figure matches ANY evidence figure
-    any_match = False
-    for sf in stmt_figures:
-        for ef in ev_figures_all:
-            if ef["value"] == 0:
-                continue
-            if figures_agree(str(sf["value"]), str(ef["value"]), tolerance=0.02):
-                any_match = True
-                break
-        if any_match:
-            break
-
-    if not any_match:
-        # The statement claims a specific number, but no number in the
-        # evidence matches it → CONTRADICTED (different figure for same metric)
-        return (
-            Verdict.CONTRADICTED,
-            f"The statement claims a specific figure that does not match the "
-            f"figure found in the filing evidence. {current_explanation}",
-        )
-
-    return Verdict.SUPPORTED, None
-
-
-def _check_false_contradicted(
-    statement: str,
-    evidence_list: list[Evidence],
-    current_explanation: str,
-) -> tuple[Verdict, str | None]:
-    """
-    Fix 1b: Check if a CONTRADICTED verdict is actually SUPPORTED.
-
-    The LLM may return CONTRADICTED because it sees $3,055,555 in the filing
-    and $3.06 billion in the statement, not realizing they're the same when
-    the filing figure is "in thousands." If any statement figure matches any
-    evidence figure (including thousands-normalized), downgrade to SUPPORTED.
-    """
-    stmt_figures = extract_figures_from_text(statement)
-    if not stmt_figures:
-        return Verdict.CONTRADICTED, None
-
-    from src.numeric import normalize_to_dollars
-    ev_figures_all = []
-    for ev in evidence_list:
-        raw_figs = extract_figures_from_text(ev.passage)
-        for ef in raw_figs:
-            ev_figures_all.append(ef)
-            ev_figures_all.append({
-                **ef,
-                "value": normalize_to_dollars(ef["value"], "thousands"),
-            })
-
-    if not ev_figures_all:
-        return Verdict.CONTRADICTED, None
-
-    for sf in stmt_figures:
-        for ef in ev_figures_all:
-            if ef["value"] == 0:
-                continue
-            if figures_agree(str(sf["value"]), str(ef["value"]), tolerance=0.02):
-                return (
-                    Verdict.SUPPORTED,
-                    f"The statement's figure matches the filing when accounting "
-                    f"for the 'in thousands' unit. {current_explanation}",
-                )
-
-    return Verdict.CONTRADICTED, None
-
-
 def _build_result(statement: str, final_state: dict) -> VerificationResult:
     """Convert final graph state to a VerificationResult."""
     verdict_data = final_state.get("verdict_data") or {
@@ -705,26 +599,8 @@ def _build_result(statement: str, final_state: dict) -> VerificationResult:
         if explanation_override:
             verdict_data["explanation"] = explanation_override
 
-    # Fix 1a: Numeric CONTRADICTED post-processor — SUPPORTED with mismatching figures → CONTRADICTED
-    if verdict == Verdict.SUPPORTED and evidence_list:
-        verdict, explanation_override = _check_contradicted(
-            statement, evidence_list, verdict_data.get("explanation", "")
-        )
-        if explanation_override:
-            verdict_data["explanation"] = explanation_override
-
-    # Fix 1b: False CONTRADICTED check — the LLM said CONTRADICTED but the figures
-    # actually match when normalized (thousands → dollars). Downgrade to SUPPORTED.
-    if verdict == Verdict.CONTRADICTED and evidence_list:
-        verdict, explanation_override = _check_false_contradicted(
-            statement, evidence_list, verdict_data.get("explanation", "")
-        )
-        if explanation_override:
-            verdict_data["explanation"] = explanation_override
-
-    # Fix 1c: OUTDATED check on CONTRADICTED — if the statement says "latest"
-    # and the evidence is from the newest filing with a different number,
-    # it's OUTDATED (old value was valid), not CONTRADICTED.
+    # Also check CONTRADICTED → OUTDATED (if statement says "latest" but
+    # newest filing shows a different value, it's OUTDATED not CONTRADICTED)
     if verdict == Verdict.CONTRADICTED and evidence_list:
         verdict, explanation_override = _check_outdated(
             statement, evidence_list, verdict_data.get("explanation", ""), verdict

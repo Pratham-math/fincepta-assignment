@@ -1,40 +1,96 @@
 """
 agent.py — LangGraph fact-checker graph.
 
-Graph structure:
-    executor_node  →  tool_node  →  executor_node  (loop)
-         ↓ (verdict or step limit)
-        END
+Graph structure (with decomposer):
+    decomposer_node  →  executor_node  →  tool_node  →  executor_node  (loop)
+                              ↓ (verdict or step limit)
+                             END
 
-Phases:
-  - Phase 3: Executor only (no Decomposer, no Memory)
-  - Phase 4 will add: decomposer_node before executor, memory recall/write
+use_decomposer=False skips decomposer_node (single-agent baseline).
+use_memory=False skips memory recall/write (Phase 5).
 """
 
 import json
+import os
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
-from src.prompts import EXECUTOR_SYSTEM_PROMPT, FEW_SHOT_MESSAGES
+from src.prompts import EXECUTOR_SYSTEM_PROMPT, DECOMPOSER_SYSTEM_PROMPT
 from src.llm import call_llm, extract_json, get_usage, reset_usage
 from src.tools import run_tool, get_counters, reset_counters
 from src.schemas import Verdict, FinishReason, Evidence, Usage, VerificationResult
+from src.numeric import figures_agree, extract_figures_from_text
 
-MAX_STEPS = int(__import__("os").getenv("MAX_EXECUTOR_STEPS", "5"))
+MAX_STEPS = int(os.getenv("MAX_EXECUTOR_STEPS", "7"))
 
 
 # ---------------------------------------------------------------------------
 # Graph State
 # ---------------------------------------------------------------------------
 class AgentState(TypedDict):
-    statement: str                          # the claim to verify
+    statement: str                          # the original claim
+    decomposition: dict | None              # output of decomposer (topic, search_terms, etc.)
     messages: Annotated[list, add_messages] # full conversation history
     steps: int                              # executor turns used
     verdict_data: dict | None               # set when executor returns a verdict
-    finish_reason: str                      # "confident" | "step_limit" | "error"
-    error: str | None                       # last error message if any
+    finish_reason: str
+    error: str | None
+
+
+# ---------------------------------------------------------------------------
+# Decomposer Node
+# ---------------------------------------------------------------------------
+def decomposer_node(state: AgentState) -> dict:
+    """
+    One LLM call that extracts the key components of the statement:
+    topic, time_scope, metric_or_entity, search_terms, relevant_filings.
+
+    On failure (malformed JSON or missing fields), falls back to the
+    original statement as a single search term.
+    """
+    statement = state["statement"]
+
+    messages = [
+        {"role": "system", "content": DECOMPOSER_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Decompose this statement:\n\n{statement}"},
+    ]
+
+    response = call_llm(messages=messages, temperature=0.0)
+    content = response["content"] or ""
+    data = extract_json(content)
+
+    # Validate — must have at minimum search_terms
+    if data and isinstance(data.get("search_terms"), list) and len(data["search_terms"]) > 0:
+        decomposition = data
+    else:
+        # One repair attempt
+        repair_messages = messages + [
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": (
+                "Please respond with ONLY the JSON object. "
+                "Required fields: topic, time_scope, metric_or_entity, "
+                "search_terms (list of strings), relevant_filings (list)."
+            )},
+        ]
+        repair_response = call_llm(messages=repair_messages, temperature=0.0)
+        repair_data = extract_json(repair_response["content"] or "")
+
+        if repair_data and isinstance(repair_data.get("search_terms"), list):
+            decomposition = repair_data
+        else:
+            # Fallback — use the raw statement as a single search term
+            decomposition = {
+                "topic": statement[:80],
+                "time_scope": None,
+                "metric_or_entity": None,
+                "search_terms": [statement[:120]],
+                "relevant_filings": ["10k_fy2024", "10q_jul2024", "10q_oct2024"],
+                "_fallback": True,
+            }
+
+    return {"decomposition": decomposition}
 
 
 # ---------------------------------------------------------------------------
@@ -50,43 +106,56 @@ def executor_node(state: AgentState) -> dict:
     messages = state["messages"]
     steps = state["steps"] + 1
 
-    # Hard stop
+    # Hard stop — step limit exceeded
     if steps > MAX_STEPS:
         return {
             "steps": steps,
             "verdict_data": {
                 "verdict": Verdict.NOT_ENOUGH_INFO,
-                "explanation": "Step limit reached without sufficient evidence.",
+                "explanation": f"Step limit ({MAX_STEPS}) reached without sufficient evidence.",
                 "evidence": [],
             },
             "finish_reason": FinishReason.STEP_LIMIT,
+            "error": "step_limit_exceeded",
         }
 
-    # Convert LangGraph message objects to plain dicts for our LLM wrapper
     plain_messages = _to_plain_messages(messages)
+
+    # If this is the first executor turn after decomposition, the message list
+    # only has the system prompt. Build the full user message now using the
+    # decomposition data from state.
+    user_msgs = [m for m in plain_messages if m["role"] == "user"]
+    if not user_msgs:
+        decomposition = state.get("decomposition")
+        first_user = _build_initial_messages(state["statement"], decomposition)
+        # Replace plain_messages with the enriched version
+        plain_messages = first_user
 
     response = call_llm(messages=plain_messages, temperature=0.0)
     content = response["content"] or ""
 
-    # --- Model wants to call a tool ---
+    # --- Tool call ---
     if response["tool_call"]:
         tc = response["tool_call"]
-        assistant_msg = {"role": "assistant", "content": content}
-        sentinel_msg = {
-            "role": "system",
-            "content": f"__TOOL_CALL__:{json.dumps(tc)}",
-        }
-        return {
-            "messages": [assistant_msg, sentinel_msg],
-            "steps": steps,
-            "verdict_data": None,
-            "finish_reason": FinishReason.CONFIDENT,
-            "error": None,
-        }
+        # Validate tool name before accepting
+        from src.tools import TOOLS
+        if tc.get("name") not in TOOLS:
+            # Unknown tool — treat as malformed and repair
+            content = f'{{"tool": "{tc.get("name", "")}", "args": {{}}}}'
+        else:
+            return {
+                "messages": [
+                    {"role": "assistant", "content": content},
+                    {"role": "system", "content": f"__TOOL_CALL__:{json.dumps(tc)}"},
+                ],
+                "steps": steps,
+                "verdict_data": None,
+                "finish_reason": FinishReason.CONFIDENT,
+                "error": None,
+            }
 
-    # --- Model returned text — try to parse a verdict ---
+    # --- Try to parse a verdict from the text ---
     verdict_data = extract_json(content)
-
     if verdict_data and _is_valid_verdict(verdict_data):
         return {
             "messages": [{"role": "assistant", "content": content}],
@@ -99,10 +168,11 @@ def executor_node(state: AgentState) -> dict:
     # --- Malformed output — one repair attempt ---
     repair_prompt = (
         "Your previous response was not valid JSON or was missing required fields. "
-        "Please respond with ONLY valid JSON. Either a tool call:\n"
-        '{"tool": "search_filings", "args": {"query": "..."}}\n'
-        "Or a verdict:\n"
-        '{"verdict": "SUPPORTED", "explanation": "...", "evidence": [...]}\n'
+        "Respond with ONLY valid JSON — either a tool call or a verdict.\n\n"
+        "Tool call format:\n"
+        '{"tool": "search_filings", "args": {"query": "..."}}\n\n'
+        "Verdict format:\n"
+        '{"verdict": "SUPPORTED", "explanation": "...", "evidence": [{"filing_id": "10k_fy2024", "page_number": 68, "passage": "exact quote", "section": null}]}\n\n'
         "verdict must be one of: SUPPORTED, CONTRADICTED, OUTDATED, NOT_ENOUGH_INFO"
     )
     repair_messages = plain_messages + [
@@ -112,25 +182,22 @@ def executor_node(state: AgentState) -> dict:
     repair_response = call_llm(messages=repair_messages, temperature=0.0)
     repair_content = repair_response["content"] or ""
 
-    # Check if repair gave a tool call
     if repair_response["tool_call"]:
         tc = repair_response["tool_call"]
-        sentinel_msg = {
-            "role": "system",
-            "content": f"__TOOL_CALL__:{json.dumps(tc)}",
-        }
-        return {
-            "messages": [
-                {"role": "assistant", "content": content},
-                {"role": "user", "content": repair_prompt},
-                {"role": "assistant", "content": repair_content},
-                sentinel_msg,
-            ],
-            "steps": steps,
-            "verdict_data": None,
-            "finish_reason": FinishReason.CONFIDENT,
-            "error": None,
-        }
+        from src.tools import TOOLS
+        if tc.get("name") in TOOLS:
+            return {
+                "messages": [
+                    {"role": "assistant", "content": content},
+                    {"role": "user", "content": repair_prompt},
+                    {"role": "assistant", "content": repair_content},
+                    {"role": "system", "content": f"__TOOL_CALL__:{json.dumps(tc)}"},
+                ],
+                "steps": steps,
+                "verdict_data": None,
+                "finish_reason": FinishReason.CONFIDENT,
+                "error": None,
+            }
 
     verdict_data = extract_json(repair_content)
     if verdict_data and _is_valid_verdict(verdict_data):
@@ -146,7 +213,7 @@ def executor_node(state: AgentState) -> dict:
             "error": None,
         }
 
-    # Both attempts failed
+    # Both attempts failed — give up gracefully
     return {
         "messages": [{"role": "assistant", "content": content}],
         "steps": steps,
@@ -160,49 +227,23 @@ def executor_node(state: AgentState) -> dict:
     }
 
 
-def _to_plain_messages(messages: list) -> list[dict]:
-    """
-    Convert LangGraph message objects (or dicts) to plain dicts
-    compatible with the OpenAI API. Filters out __TOOL_CALL__ sentinels.
-    """
-    plain = []
-    for m in messages:
-        if isinstance(m, dict):
-            role = m.get("role", "user")
-            content = m.get("content", "") or ""
-        else:
-            # LangGraph wraps messages in objects with .type and .content
-            type_map = {
-                "human": "user",
-                "ai": "assistant",
-                "system": "system",
-                "tool": "user",
-            }
-            role = type_map.get(getattr(m, "type", "human"), "user")
-            content = getattr(m, "content", "") or ""
-
-        # Skip sentinel messages — they're internal bookkeeping
-        if content.startswith("__TOOL_CALL__:"):
-            continue
-
-        plain.append({"role": role, "content": content})
-    return plain
-
-
 # ---------------------------------------------------------------------------
 # Tool Node
 # ---------------------------------------------------------------------------
 def tool_node(state: AgentState) -> dict:
     """
     Execute the tool encoded in the last __TOOL_CALL__ sentinel message.
-    Removes the sentinel and appends the tool result as a user message.
+    Returns tool result as a user message. Handles tool errors gracefully.
     """
     messages = state["messages"]
 
-    # Find the last sentinel message (works on both dicts and LangGraph objects)
+    # Find the last sentinel
     tc = None
     for msg in reversed(messages):
-        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        content = (
+            msg.get("content", "") if isinstance(msg, dict)
+            else getattr(msg, "content", "")
+        )
         if content and isinstance(content, str) and content.startswith("__TOOL_CALL__:"):
             try:
                 tc = json.loads(content[len("__TOOL_CALL__:"):])
@@ -212,96 +253,154 @@ def tool_node(state: AgentState) -> dict:
 
     if not tc:
         return {
-            "messages": [{"role": "user", "content": "Tool error: no pending tool call found."}],
+            "messages": [{
+                "role": "user",
+                "content": "Tool error: no pending tool call found. Please call search_filings to continue.",
+            }],
         }
 
     tool_name = tc.get("name", "")
     tool_args = tc.get("arguments", {})
 
+    # Run tool — run_tool already handles unknown tool names
     result = run_tool(tool_name, tool_args)
-    result_str = json.dumps(result, ensure_ascii=False)
 
-    # Truncate very long results to avoid bloating context
-    if len(result_str) > 6000:
-        result_str = result_str[:6000] + "\n... [truncated]"
+    # Surface tool errors clearly so the executor can respond to them
+    if isinstance(result, dict) and "error" in result:
+        result_str = json.dumps({"error": result["error"], "tool": tool_name})
+    else:
+        result_str = json.dumps(result, ensure_ascii=False)
+        # Truncate very long results
+        if len(result_str) > 6000:
+            result_str = result_str[:6000] + "\n... [truncated]"
 
     return {
-        "messages": [
-            {
-                "role": "user",
-                "content": f"Tool result for {tool_name}:\n{result_str}",
-            }
-        ],
+        "messages": [{
+            "role": "user",
+            "content": f"Tool result for {tool_name}:\n{result_str}",
+        }],
     }
 
 
 # ---------------------------------------------------------------------------
-# Router — decides next node after executor
+# Router
 # ---------------------------------------------------------------------------
 def route_after_executor(state: AgentState) -> str:
-    """Return the name of the next node to visit."""
-    # Verdict reached
     if state.get("verdict_data"):
         return END
-
-    # Step limit hit
     if state["steps"] >= MAX_STEPS:
         return END
-
-    # Check for a pending tool call sentinel in messages
-    messages = state["messages"]
-    for msg in reversed(messages):
-        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
-        if content and content.startswith("__TOOL_CALL__:"):
+    # Check for pending tool call sentinel
+    for msg in reversed(state["messages"]):
+        content = (
+            msg.get("content", "") if isinstance(msg, dict)
+            else getattr(msg, "content", "")
+        )
+        if content and isinstance(content, str) and content.startswith("__TOOL_CALL__:"):
             return "tool_node"
-
     return END
 
 
 # ---------------------------------------------------------------------------
-# Helper — validate verdict structure
+# Helpers
 # ---------------------------------------------------------------------------
+def _to_plain_messages(messages: list) -> list[dict]:
+    """Convert LangGraph message objects to plain dicts. Strip sentinels."""
+    type_map = {"human": "user", "ai": "assistant", "system": "system", "tool": "user"}
+    plain = []
+    for m in messages:
+        if isinstance(m, dict):
+            role = m.get("role", "user")
+            content = m.get("content", "") or ""
+        else:
+            role = type_map.get(getattr(m, "type", "human"), "user")
+            content = getattr(m, "content", "") or ""
+        if isinstance(content, str) and content.startswith("__TOOL_CALL__:"):
+            continue
+        plain.append({"role": role, "content": content})
+    return plain
+
+
 def _is_valid_verdict(data: dict) -> bool:
-    """Return True if data has the required verdict fields."""
     if not isinstance(data, dict):
         return False
-    if "verdict" not in data:
-        return False
-    valid_verdicts = {"SUPPORTED", "CONTRADICTED", "OUTDATED", "NOT_ENOUGH_INFO"}
-    if data["verdict"] not in valid_verdicts:
-        return False
-    if "explanation" not in data:
-        return False
-    if "evidence" not in data:
-        return False
-    return True
+    valid = {"SUPPORTED", "CONTRADICTED", "OUTDATED", "NOT_ENOUGH_INFO"}
+    return (
+        data.get("verdict") in valid
+        and "explanation" in data
+        and "evidence" in data
+    )
+
+
+def _build_initial_messages(statement: str, decomposition: dict | None) -> list[dict]:
+    """Build the executor's initial message list, optionally enriched by decomposition."""
+    context = ""
+    if decomposition and not decomposition.get("_fallback"):
+        filings = decomposition.get("relevant_filings", [])
+        context = (
+            f"\n\nClaim analysis:\n"
+            f"- Topic: {decomposition.get('topic', '')}\n"
+            f"- Time scope: {decomposition.get('time_scope', 'not specified')}\n"
+            f"- Key metric/entity: {decomposition.get('metric_or_entity', '')}\n"
+            f"- Suggested search terms: {', '.join(decomposition.get('search_terms', []))}\n"
+            f"- Filings to check: {', '.join(filings)}\n"
+        )
+        # Explicit multi-filing instruction when needed
+        if len(filings) > 1:
+            context += (
+                f"\nIMPORTANT: Search ALL of these filings: {', '.join(filings)}. "
+                f"Compare the value across filings. If an older filing matches the "
+                f"statement but a newer filing shows a different value, the verdict is OUTDATED.\n"
+            )
+
+    # Add hint for "latest" statements
+    stmt_lower = statement.lower()
+    if any(w in stmt_lower for w in ["latest", "current", "most recent", "as of"]):
+        context += (
+            "\nNOTE: This statement uses 'latest' or 'current'. "
+            "You MUST check the newest filing (10q_oct2024) to see if the value changed. "
+            "If an older filing matches but 10q_oct2024 shows a different value, use OUTDATED.\n"
+        )
+
+    return [
+        {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"Verify this statement against the CrowdStrike SEC filings:\n\n"
+                f"{statement}{context}\n\n"
+                f"Start by calling search_filings."
+            ),
+        },
+    ]
 
 
 # ---------------------------------------------------------------------------
-# Build the graph
+# Build two graphs: with and without decomposer
 # ---------------------------------------------------------------------------
-def _build_graph() -> Any:
+def _build_graph(with_decomposer: bool) -> Any:
     builder = StateGraph(AgentState)
-
     builder.add_node("executor_node", executor_node)
     builder.add_node("tool_node", tool_node)
 
-    builder.set_entry_point("executor_node")
+    if with_decomposer:
+        builder.add_node("decomposer_node", decomposer_node)
+        builder.set_entry_point("decomposer_node")
+        builder.add_edge("decomposer_node", "executor_node")
+    else:
+        builder.set_entry_point("executor_node")
 
     builder.add_conditional_edges(
         "executor_node",
         route_after_executor,
-        {
-            "tool_node": "tool_node",
-            END: END,
-        },
+        {"tool_node": "tool_node", END: END},
     )
     builder.add_edge("tool_node", "executor_node")
-
     return builder.compile()
 
 
-_GRAPH = _build_graph()
+_GRAPH_NO_DECOMP  = _build_graph(with_decomposer=False)
+_GRAPH_WITH_DECOMP = _build_graph(with_decomposer=True)
 
 
 # ---------------------------------------------------------------------------
@@ -309,39 +408,32 @@ _GRAPH = _build_graph()
 # ---------------------------------------------------------------------------
 def run_check(
     statement: str,
-    use_decomposer: bool = False,   # Phase 4 will wire this up
-    use_memory: bool = False,        # Phase 5 will wire this up
+    use_decomposer: bool = True,
+    use_memory: bool = False,   # Phase 5
 ) -> VerificationResult:
     """
     Check a statement against the filings.
 
     Args:
         statement:      The claim to verify
-        use_decomposer: Whether to run the Decomposer first (Phase 4+)
-        use_memory:     Whether to use evidence memory (Phase 5+)
+        use_decomposer: Run Decomposer before Executor (default True)
+        use_memory:     Use evidence memory cache (Phase 5, default False)
 
     Returns:
-        VerificationResult with verdict, evidence, explanation and usage stats
+        VerificationResult
     """
     reset_usage()
     reset_counters()
 
-    # Initial messages — system prompt + few-shot example + actual task
-    initial_messages = [
-        {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
-        *FEW_SHOT_MESSAGES,
-        {
-            "role": "user",
-            "content": (
-                f"Verify this statement against the CrowdStrike SEC filings:\n\n"
-                f"{statement}\n\n"
-                f"Start by calling search_filings."
-            ),
-        },
-    ]
+    graph = _GRAPH_WITH_DECOMP if use_decomposer else _GRAPH_NO_DECOMP
+
+    # For graphs without decomposer we seed decomposition as None
+    # and build messages directly
+    initial_messages = _build_initial_messages(statement, decomposition=None)
 
     initial_state: AgentState = {
         "statement": statement,
+        "decomposition": None,
         "messages": initial_messages,
         "steps": 0,
         "verdict_data": None,
@@ -349,51 +441,168 @@ def run_check(
         "error": None,
     }
 
-    final_state = _GRAPH.invoke(initial_state)
+    # For the decomposer graph, the decomposer_node will fill decomposition,
+    # but executor needs messages built AFTER decomposition.
+    # We handle this by having executor_node enrich the first user message
+    # when it sees a decomposition in state.
+    if use_decomposer:
+        # Start with minimal messages — executor_node will rebuild after decompose
+        initial_state["messages"] = [
+            {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
+        ]
 
-    # Build result
+    final_state = graph.invoke(initial_state)
+
+    return _build_result(statement, final_state)
+
+
+FILING_ORDER = ["10k_fy2024", "10q_jul2024", "10q_oct2024"]
+
+
+def _check_outdated(
+    statement: str,
+    evidence_list: list[Evidence],
+    current_explanation: str,
+) -> tuple[Verdict, str | None]:
+    """
+    Post-process a SUPPORTED verdict to catch OUTDATED/CONTRADICTED cases
+    where the LLM missed a numeric mismatch.
+
+    Cases handled:
+    1. Statement says "latest X is Y", evidence from newest filing shows Z ≠ Y → CONTRADICTED
+    2. Statement says "latest X is Y", evidence from older filing shows Y, but
+       newest filing would show Z ≠ Y → OUTDATED
+    """
+    stmt_lower = statement.lower()
+    latest_keywords = ["latest", "current", "most recent", "stands at", "is now"]
+    has_latest = any(kw in stmt_lower for kw in latest_keywords)
+
+    if not evidence_list or not has_latest:
+        return Verdict.SUPPORTED, None
+
+    # Extract numbers from the statement
+    stmt_figures = extract_figures_from_text(statement)
+    if not stmt_figures:
+        return Verdict.SUPPORTED, None
+
+    # Find the newest filing cited in evidence
+    cited_filings = [ev.filing_id for ev in evidence_list if ev.filing_id in FILING_ORDER]
+    if not cited_filings:
+        return Verdict.SUPPORTED, None
+
+    newest_cited = max(cited_filings, key=lambda f: FILING_ORDER.index(f))
+
+    # Case 1: evidence from newest filing but numbers don't match statement
+    if newest_cited == FILING_ORDER[-1]:
+        for ev in evidence_list:
+            ev_figures = extract_figures_from_text(ev.passage)
+            # Also try normalizing passage figures as "in thousands" (common in filings)
+            ev_figures_thousands = []
+            for ef in ev_figures:
+                from src.numeric import normalize_to_dollars
+                ev_figures_thousands.append({
+                    **ef,
+                    "value": normalize_to_dollars(ef["value"], "thousands")
+                })
+            all_ev_figures = ev_figures + ev_figures_thousands
+
+            for sf in stmt_figures:
+                for ef in all_ev_figures:
+                    if ef["value"] == 0:
+                        continue
+                    if not figures_agree(str(sf["value"]), str(ef["value"]), tolerance=0.02):
+                        # The latest filing has a different value.
+                        # This means the statement's figure was likely true in an older filing
+                        # but the newest filing has since changed it → OUTDATED.
+                        return (
+                            Verdict.OUTDATED,
+                            f"The latest filing (10q_oct2024) reports a different value than "
+                            f"the statement claims. The statement's figure likely matched an "
+                            f"older filing but has since been updated. {current_explanation}",
+                        )
+        return Verdict.SUPPORTED, None
+
+    # Case 2: evidence from older filing — flag as OUTDATED since there's a newer filing
+    return (
+        Verdict.OUTDATED,
+        f"The statement's figure matches {newest_cited} (an older filing), "
+        f"but the newest filing (10q_oct2024) may report a different value. "
+        f"Original explanation: {current_explanation}",
+    )
+
+
+def _build_result(statement: str, final_state: dict) -> VerificationResult:
+    """Convert final graph state to a VerificationResult."""
     verdict_data = final_state.get("verdict_data") or {
         "verdict": Verdict.NOT_ENOUGH_INFO,
         "explanation": "No verdict was reached.",
         "evidence": [],
     }
 
-    # Validate and normalize verdict
-    verdict_str = verdict_data.get("verdict", "NOT_ENOUGH_INFO")
     try:
-        verdict = Verdict(verdict_str)
+        verdict = Verdict(verdict_data.get("verdict", "NOT_ENOUGH_INFO"))
     except ValueError:
         verdict = Verdict.NOT_ENOUGH_INFO
 
-    # Build evidence list — validate passage_id if present
     evidence_list = []
     for ev in verdict_data.get("evidence", []):
         if not isinstance(ev, dict):
             continue
-        evidence_list.append(
-            Evidence(
-                filing_id=ev.get("filing_id", "unknown"),
-                page_number=int(ev.get("page_number", 0)),
-                passage=ev.get("passage", ""),
-                section=ev.get("section"),
-            )
-        )
+        # Validate filing_id
+        filing_id = ev.get("filing_id", "unknown")
+        if filing_id not in {"10k_fy2024", "10q_jul2024", "10q_oct2024"}:
+            filing_id = "unknown"
+        try:
+            page_number = int(ev.get("page_number", 0))
+        except (ValueError, TypeError):
+            page_number = 0
+        passage = ev.get("passage", "")
+        # Reject empty, very short, or clearly hallucinated passages
+        # Real filing quotes don't start with "The filing does not" or "No information"
+        hallucination_markers = [
+            "the filing does not",
+            "no information",
+            "not mentioned",
+            "not disclosed",
+            "cannot be found",
+            "there is no",
+            "this information is not",
+        ]
+        passage_lower = passage.lower().strip()
+        if not passage or len(passage.strip()) < 15:
+            continue
+        if any(passage_lower.startswith(m) for m in hallucination_markers):
+            continue
+        evidence_list.append(Evidence(
+            filing_id=filing_id,
+            page_number=page_number,
+            passage=passage,
+            section=ev.get("section"),
+        ))
 
-    # Collect usage
+    # Post-process: use Python to catch cases where the LLM missed OUTDATED.
+    # If the statement is SUPPORTED but contains a figure that doesn't match
+    # the evidence passage, and there's a newer filing with a different value,
+    # upgrade to OUTDATED.
+    if verdict == Verdict.SUPPORTED and evidence_list:
+        verdict, explanation_override = _check_outdated(
+            statement, evidence_list, verdict_data.get("explanation", "")
+        )
+        if explanation_override:
+            verdict_data["explanation"] = explanation_override
+
     llm_usage = get_usage()
     tool_usage = get_counters()
-
     usage = Usage(
         llm_calls=llm_usage["llm_calls"],
         input_tokens=llm_usage["input_tokens"],
         output_tokens=llm_usage["output_tokens"],
         tool_calls=tool_usage["total"],
-        memory_hits=0,  # Phase 5
+        memory_hits=0,
     )
 
-    finish_reason = final_state.get("finish_reason", FinishReason.CONFIDENT)
     try:
-        finish_reason = FinishReason(finish_reason)
+        finish_reason = FinishReason(final_state.get("finish_reason", FinishReason.CONFIDENT))
     except ValueError:
         finish_reason = FinishReason.CONFIDENT
 
@@ -407,33 +616,27 @@ def run_check(
     )
 
 
-def run_check_stream(statement: str):
+def run_check_stream(statement: str, use_decomposer: bool = True):
     """
-    Generator that yields step events as the agent works.
-    Used by the FastAPI streaming endpoint.
+    Generator that yields step events as the agent works, then the final result.
 
     Yields dicts:
-      {"type": "step", "step": N, "action": "tool_call"|"verdict", "detail": ...}
+      {"type": "step",   "step": N, "action": str, "detail": str}
       {"type": "result", "data": VerificationResult.model_dump()}
     """
     reset_usage()
     reset_counters()
 
-    initial_messages = [
-        {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
-        *FEW_SHOT_MESSAGES,
-        {
-            "role": "user",
-            "content": (
-                f"Verify this statement against the CrowdStrike SEC filings:\n\n"
-                f"{statement}\n\n"
-                f"Start by calling search_filings."
-            ),
-        },
-    ]
+    graph = _GRAPH_WITH_DECOMP if use_decomposer else _GRAPH_NO_DECOMP
+
+    if use_decomposer:
+        initial_messages = [{"role": "system", "content": EXECUTOR_SYSTEM_PROMPT}]
+    else:
+        initial_messages = _build_initial_messages(statement, decomposition=None)
 
     initial_state: AgentState = {
         "statement": statement,
+        "decomposition": None,
         "messages": initial_messages,
         "steps": 0,
         "verdict_data": None,
@@ -441,10 +644,17 @@ def run_check_stream(statement: str):
         "error": None,
     }
 
-    # Stream graph updates
-    for event in _GRAPH.stream(initial_state, stream_mode="updates"):
+    for event in graph.stream(initial_state, stream_mode="updates"):
         for node_name, node_output in event.items():
-            if node_name == "executor_node":
+            if node_name == "decomposer_node":
+                decomp = node_output.get("decomposition", {})
+                yield {
+                    "type": "step",
+                    "step": 0,
+                    "action": "decomposed",
+                    "detail": f"topic={decomp.get('topic', '')} terms={decomp.get('search_terms', [])}",
+                }
+            elif node_name == "executor_node":
                 if node_output.get("verdict_data"):
                     yield {
                         "type": "step",
@@ -453,28 +663,33 @@ def run_check_stream(statement: str):
                         "detail": node_output["verdict_data"].get("verdict"),
                     }
                 else:
-                    # Tool call coming
                     msgs = node_output.get("messages", [])
                     tool_name = None
                     for m in msgs:
-                        if isinstance(m, dict) and m.get("tool_calls"):
-                            tool_name = m["tool_calls"][0]["function"]["name"]
+                        c = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+                        if c and c.startswith("__TOOL_CALL__:"):
+                            try:
+                                tc = json.loads(c[len("__TOOL_CALL__:"):])
+                                tool_name = tc.get("name")
+                            except Exception:
+                                pass
                     yield {
                         "type": "step",
                         "step": node_output.get("steps", 0),
                         "action": "tool_call",
-                        "detail": tool_name,
+                        "detail": tool_name or "unknown",
                     }
             elif node_name == "tool_node":
                 msgs = node_output.get("messages", [])
+                content = ""
+                for m in msgs:
+                    content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
                 yield {
                     "type": "step",
                     "step": 0,
                     "action": "tool_result",
-                    "detail": f"tool returned {len(msgs)} message(s)",
+                    "detail": content[:120] if content else "",
                 }
 
-    # Final result — re-run to get structured output
-    # (stream gives us updates but not the final composed state easily)
-    result = run_check(statement)
+    result = run_check(statement, use_decomposer=use_decomposer)
     yield {"type": "result", "data": result.model_dump()}

@@ -1,0 +1,182 @@
+[
+  {
+    "id": "s01",
+    "statement": "CrowdStrike generated approximately $3.06 billion in total revenue in fiscal 2024.",
+    "expected_verdict": "SUPPORTED",
+    "filing_id": "10k_fy2024",
+    "page_hint": "Item 7, Revenue; PDF page 70 (printed page 64)",
+    "proof_quote": "The following shows total revenue from subscriptions and professional services for fiscal 2024, as compared to fiscal 2023 (in thousands, except percentages): ... Total revenue $ 3,055,555 $ 2,241,236 $ 814,319 36 %",
+    "notes": "$3,055,555 thousand equals $3.055555 billion, which rounds to $3.06 billion. Fiscal 2024 ended January 31, 2024. All PDF page references are 1-based positions in the supplied files."
+  },
+  {
+    "id": "s02",
+    "statement": "CrowdStrike generated approximately $963.9 million in revenue during the quarter ended July 31, 2024.",
+    "expected_verdict": "SUPPORTED",
+    "filing_id": "10q_jul2024",
+    "page_hint": "Part I, Item 1, Condensed Consolidated Statements of Operations; PDF page 7 (printed page 7)",
+    "proof_quote": "(in thousands, except per share data) ... Three Months Ended July 31, Six Months Ended July 31, 2024 2023 2024 2023 ... Total revenue 963,872 731,626 1,884,908 1,424,206",
+    "notes": "The first column is the three months ended July 31, 2024: $963,872 thousand, or $963.872 million. The six-month figure is a different column."
+  },
+  {
+    "id": "s03",
+    "statement": "A Falcon sensor content configuration update released on July 19, 2024 caused certain Windows systems to crash.",
+    "expected_verdict": "SUPPORTED",
+    "filing_id": "10q_jul2024",
+    "page_hint": "Part I, Item 1, Note 8, Commitments and Contingencies; PDF page 25 (printed page 25)",
+    "proof_quote": "On July 19, 2024, the Company released a content configuration update for its Falcon sensor that resulted in system crashes for certain Windows systems (the \"Channel File 291 Incident\").",
+    "notes": "The filing explicitly identifies the release date, Falcon sensor update and resulting Windows system crashes. The October filing calls the same event the July 19 Incident."
+  },
+  {
+    "id": "s04",
+    "statement": "Delta Air Lines sued CrowdStrike, Inc. in Georgia state court on October 25, 2024 over the July 19 incident.",
+    "expected_verdict": "SUPPORTED",
+    "filing_id": "10q_oct2024",
+    "page_hint": "Part I, Item 1, Note 8, July 19 Incident; PDF page 33",
+    "proof_quote": "The Company is subject to a number of legal proceedings in connection with the July 19 Incident, including: ... On October 25, 2024, Delta Airlines, Inc. (\"Delta\") filed a complaint against CrowdStrike, Inc. in the Superior Court for Fulton County, Georgia,",
+    "notes": "Note 8 lists Delta's October 25 complaint among proceedings connected with the incident. This confirms that a suit was filed, rather than establishing the truth of its allegations."
+  },
+  {
+    "id": "s05",
+    "statement": "CrowdStrike employed 7,925 full-time employees as of January 31, 2024.",
+    "expected_verdict": "SUPPORTED",
+    "filing_id": "10k_fy2024",
+    "page_hint": "Item 1, Human Capital Resources; PDF page 22 (printed page 18)",
+    "proof_quote": "As of January 31, 2024, we had 7,925 full-time employees.",
+    "notes": "This is an explicitly dated historical headcount, so later filings do not make it outdated. Temporary employees and consultants are discussed separately."
+  },
+  {
+    "id": "s06",
+    "statement": "CrowdStrike's annual recurring revenue was approximately $3.06 billion as of January 31, 2024.",
+    "expected_verdict": "CONTRADICTED",
+    "filing_id": "10k_fy2024",
+    "page_hint": "Item 7, Key Metrics, Annual Recurring Revenue; PDF page 67 (printed page 61)",
+    "proof_quote": "The following table sets forth our ARR as of the dates presented (dollars in thousands): ... As of January 31, 2024 2023 Annual recurring revenue $ 3,435,150 $ 2,559,694",
+    "notes": "ARR was $3.435150 billion, approximately $3.44 billion. The statement substitutes the approximately $3.06 billion fiscal-year revenue figure for ARR, which is a different metric."
+  },
+  {
+    "id": "s07",
+    "statement": "The Falcon sensor update released on July 19, 2024 did not cause any Windows systems to crash.",
+    "expected_verdict": "CONTRADICTED",
+    "filing_id": "10q_jul2024",
+    "page_hint": "Part I, Item 1, Note 8, Channel File 291 Incident; PDF page 25 (printed page 25)",
+    "proof_quote": "On July 19, 2024, the Company released a content configuration update for its Falcon sensor that resulted in system crashes for certain Windows systems (the \"Channel File 291 Incident\").",
+    "notes": "The filing affirmatively says the update caused crashes on certain Windows systems, directly contradicting the denial."
+  },
+  {
+    "id": "s08",
+    "statement": "CrowdStrike reported positive GAAP operating income in fiscal 2024.",
+    "expected_verdict": "CONTRADICTED",
+    "filing_id": "10k_fy2024",
+    "page_hint": "Item 7, Results of Operations; PDF page 69 (printed page 63)",
+    "proof_quote": "The following tables set forth our consolidated statements of operations for each period presented (in thousands, except percentages): ... Year Ended January 31, 2024 2023 2022 ... Loss from operations (1,995) (190,112) (142,548)",
+    "notes": "Fiscal 2024 had an operating loss of $1.995 million. Positive net income attributable to CrowdStrike of $89.327 million is a different line item and does not establish positive operating income."
+  },
+  {
+    "id": "s09",
+    "statement": "CrowdStrike generated approximately $2.90 billion in revenue during the three months ended October 31, 2024.",
+    "expected_verdict": "CONTRADICTED",
+    "filing_id": "10q_oct2024",
+    "page_hint": "Part I, Item 1, Condensed Consolidated Statements of Operations; PDF page 11 (printed page 7)",
+    "proof_quote": "(in thousands, except per share data) ... Three Months Ended October 31, Nine Months Ended October 31, 2024 2023 2024 2023 ... Total revenue 1,010,178 786,014 2,895,086 2,210,220",
+    "notes": "Three-month revenue was $1.010178 billion. Approximately $2.90 billion is the nine-month revenue figure, so the statement confuses reporting periods."
+  },
+  {
+    "id": "s10",
+    "statement": "CrowdStrike paid cash dividends on its capital stock during fiscal 2024.",
+    "expected_verdict": "CONTRADICTED",
+    "filing_id": "10k_fy2024",
+    "page_hint": "Item 5, Dividend Policy; PDF page 64 (printed page 58)",
+    "proof_quote": "We have never declared or paid any cash dividends on our capital stock.",
+    "notes": "The company's explicit statement that it had never paid cash dividends rules out a fiscal 2024 cash dividend."
+  },
+  {
+    "id": "s11",
+    "statement": "CrowdStrike's latest reported annual recurring revenue stands at approximately $3.44 billion.",
+    "expected_verdict": "OUTDATED",
+    "filing_id": "10k_fy2024,10q_oct2024",
+    "page_hint": "10-K: Item 7, PDF page 67 (printed 61); October 10-Q: Part I, Item 2, PDF page 43 (printed 33)",
+    "proof_quote": "[10k_fy2024] The following table sets forth our ARR as of the dates presented (dollars in thousands): ... As of January 31, 2024 2023 Annual recurring revenue $ 3,435,150 $ 2,559,694 [10q_oct2024] The following table sets forth our ARR as of the dates presented (dollars in thousands): ... As of October 31, 2024 2023 Annual recurring revenue $ 4,017,540 $ 3,153,243",
+    "notes": "Latest is evaluated within the supplied three-filing corpus. ARR increased from $3.435150 billion at January 31 to $4.017540 billion at October 31, 2024. The old value remains valid historically but is stale as a latest-reported figure."
+  },
+  {
+    "id": "s12",
+    "statement": "CrowdStrike's latest reported dollar-based net retention rate is 119%.",
+    "expected_verdict": "OUTDATED",
+    "filing_id": "10k_fy2024,10q_oct2024",
+    "page_hint": "10-K: Item 7, PDF page 68 (printed 62); October 10-Q: Part I, Item 2, PDF page 43 (printed 33)",
+    "proof_quote": "[10k_fy2024] As of January 31, 2024 2023 Dollar-based net retention rate 119 % 125 % [10q_oct2024] Our dollar-based net retention rate was 115% as of October 31, 2024.",
+    "notes": "The annual filing supports 119% at January 31, 2024, but the latest supplied quarterly filing reports 115% at October 31. This present-tense statement uses the superseded figure."
+  },
+  {
+    "id": "s13",
+    "statement": "CrowdStrike's latest reported cash and cash equivalents balance is approximately $3.38 billion.",
+    "expected_verdict": "OUTDATED",
+    "filing_id": "10k_fy2024,10q_oct2024",
+    "page_hint": "10-K: Item 8, Balance Sheets, PDF page 86 (printed 79); October 10-Q: Part I, Item 1, PDF page 9 (printed 6)",
+    "proof_quote": "[10k_fy2024] (in thousands, except per share data) ... January 31, 2024 2023 ... Cash and cash equivalents $ 3,375,069 $ 2,455,369 [10q_oct2024] October 31, January 31, 2024 2024 ... Cash and cash equivalents $ 4,260,324 $ 3,375,069",
+    "notes": "Cash and cash equivalents increased from $3.375069 billion at January 31 to $4.260324 billion at October 31, 2024. Within this corpus, $3.38 billion is an earlier balance rather than the latest one. Short-term investments are excluded."
+  },
+  {
+    "id": "s14",
+    "statement": "CrowdStrike's latest reported remaining performance obligations total $4.6 billion.",
+    "expected_verdict": "OUTDATED",
+    "filing_id": "10k_fy2024,10q_oct2024",
+    "page_hint": "10-K: Item 8, Note 8, PDF page 117 (printed 108); October 10-Q: Part I, Item 1, Note 7, PDF page 31",
+    "proof_quote": "[10k_fy2024] As of January 31, 2024, the aggregate amount of the transaction price allocated to remaining performance obligations was $4.6 billion. [10q_oct2024] As of October 31, 2024, the aggregate amount of the transaction price allocated to remaining performance obligations was $5.4 billion.",
+    "notes": "The earlier $4.6 billion disclosure is superseded by $5.4 billion in the latest supplied filing. The January figure remains historically correct."
+  },
+  {
+    "id": "s15",
+    "statement": "CrowdStrike's latest reported accrued balance for costs related to the July 19 incident is approximately $4.3 million.",
+    "expected_verdict": "OUTDATED",
+    "filing_id": "10q_jul2024,10q_oct2024",
+    "page_hint": "July 10-Q: Part I, Item 1, Note 8, PDF page 25; October 10-Q: Part I, Item 1, Note 8, PDF page 35 (printed 26)",
+    "proof_quote": "[10q_jul2024] Expenses incurred and amounts accrued relating to the Channel File 291 Incident as of July 31, 2024 were as follows (in thousands): ... Balance, end of period $ 4,291 [10q_oct2024] Amounts accrued and expenses incurred, net of insurance receivable recorded, relating to the July 19 Incident during the three months ended October 31, 2024 were as follows (in thousands): ... Balance at July 31, 2024 $ 4,291 ... Balance at October 31, 2024 $ 21,809",
+    "notes": "The July balance was $4.291 million. The October filing rolls that same opening balance forward to $21.809 million, net of recorded insurance receivables. This is an accrued balance, not total incident damages or a lawsuit settlement estimate."
+  },
+  {
+    "id": "s16",
+    "statement": "The July 19, 2024 incident affected exactly 8.5 million Windows devices worldwide.",
+    "expected_verdict": "NOT_ENOUGH_INFO",
+    "filing_id": "10q_oct2024",
+    "page_hint": "No proving page; related discussion: October 10-Q, Note 8, PDF page 33 and Item 2, PDF page 42; July 10-Q, Note 8, PDF page 25",
+    "proof_quote": "",
+    "notes": "Across the three supplied filings, no count of 8.5 million affected devices is disclosed. The incident passages identify certain Windows systems but do not quantify affected devices. Outside reports must not fill this gap."
+  },
+  {
+    "id": "s17",
+    "statement": "CrowdStrike achieved a customer net promoter score of 75 in fiscal 2024.",
+    "expected_verdict": "NOT_ENOUGH_INFO",
+    "filing_id": "10k_fy2024",
+    "page_hint": "No proving page; related customer-satisfaction discussion: Item 1, PDF page 19 and Item 1A, PDF page 41",
+    "proof_quote": "",
+    "notes": "No net promoter score is disclosed in any of the three supplied filings. Qualitative customer-satisfaction discussion and dollar-based net retention are not evidence of an NPS of 75."
+  },
+  {
+    "id": "s18",
+    "statement": "Delta Air Lines accounted for 2% of CrowdStrike's fiscal 2024 revenue.",
+    "expected_verdict": "NOT_ENOUGH_INFO",
+    "filing_id": "10k_fy2024",
+    "page_hint": "No proving page; related disclosures: 10-K, Note 8, PDF page 116; October 10-Q, Note 8, PDF page 33",
+    "proof_quote": "",
+    "notes": "The three filings do not disclose Delta-specific fiscal 2024 revenue or its revenue share. Geographic revenue disclosures and the later Delta litigation do not establish a 2% contribution."
+  },
+  {
+    "id": "s19",
+    "statement": "CrowdStrike's median customer-support ticket resolution time was under two hours in fiscal 2024.",
+    "expected_verdict": "NOT_ENOUGH_INFO",
+    "filing_id": "10k_fy2024",
+    "page_hint": "No proving page; related customer-support discussion: Item 1A, PDF page 41",
+    "proof_quote": "",
+    "notes": "The filings discuss the importance of customer support but provide no median support-ticket resolution time or two-hour threshold. Searches across all three supplied filings found no such metric."
+  },
+  {
+    "id": "s20",
+    "statement": "CrowdStrike held a 25% share of the global endpoint security market in fiscal 2024.",
+    "expected_verdict": "NOT_ENOUGH_INFO",
+    "filing_id": "10k_fy2024",
+    "page_hint": "No proving page; related competition discussion: Item 1A, PDF pages 30-31",
+    "proof_quote": "",
+    "notes": "The filings discuss competition and the risk of losing market share but do not disclose a 25% global endpoint-security market share for fiscal 2024. No supporting or refuting quantitative market-share disclosure was found across the three supplied filings."
+  }
+]

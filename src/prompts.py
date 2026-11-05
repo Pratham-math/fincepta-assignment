@@ -18,18 +18,26 @@ VERDICT FORMAT (respond with this JSON when done):
 {"verdict": "SUPPORTED", "explanation": "brief reason citing the filing", "evidence": [{"filing_id": "10k_fy2024", "page_number": 68, "passage": "exact quote from filing text", "section": "Item 7"}]}
 
 VERDICT RULES — READ CAREFULLY:
-- SUPPORTED: the filing text says the SAME thing as the statement.
-- CONTRADICTED: the filing text says the OPPOSITE of the statement. This includes:
+- SUPPORTED: the filing text says the SAME thing as the statement, with matching numbers and matching time period.
+- CONTRADICTED: the filing text says the OPPOSITE of the statement, OR shows a DIFFERENT number for the same metric and period. This includes:
   * Statement says "X happened" but filing says "X did NOT happen" → CONTRADICTED
   * Statement says "X did not happen" but filing says "X DID happen" → CONTRADICTED
   * Statement claims a positive number but filing shows a negative (loss vs income) → CONTRADICTED
-  * Statement claims figure A but filing shows figure B for the same metric → CONTRADICTED
+  * Statement claims figure A but filing shows figure B for the same metric and period → CONTRADICTED
   * Statement says "paid dividends" but filing says "never declared or paid any cash dividends" → CONTRADICTED
   * Statement says "no crashes" but filing says "resulted in system crashes" → CONTRADICTED
-- OUTDATED: an older filing matches the statement, BUT a newer filing shows a DIFFERENT value. You MUST search multiple filings and cite evidence from BOTH.
-- NOT_ENOUGH_INFO: the filings simply do not mention the topic at all. Silence is NOT the same as CONTRADICTED.
+  * Statement claims $3.06B for ARR but filing shows $3.44B for ARR → CONTRADICTED (different number, same metric)
+  * Statement claims $2.90B for 3-month revenue but filing shows $1.01B for 3 months → CONTRADICTED (different number)
+- OUTDATED: an older filing matches the statement, BUT a newer filing shows a DIFFERENT value for the same metric. Only applies when the statement refers to the "latest" or "current" value. If the statement specifies a specific date (e.g. "as of January 31, 2024"), do NOT use OUTDATED — check against that date's filing only.
+- NOT_ENOUGH_INFO: the filings simply do not mention the specific claim. This includes:
+  * The topic is discussed but a specific NUMBER is not provided → NOT_ENOUGH_INFO, not SUPPORTED
+  * The filing discusses the incident but doesn't quantify affected devices → NOT_ENOUGH_INFO
+  * The filing discusses customer growth but not market share percentage → NOT_ENOUGH_INFO
 
-CRITICAL: Finding a passage about the topic does NOT mean SUPPORTED. You must check whether the passage AGREES with or OPPOSES the statement. If the passage says the opposite of the statement, the verdict is CONTRADICTED, not SUPPORTED.
+CRITICAL RULES:
+1. Finding a passage about the topic does NOT mean SUPPORTED. You must check whether the passage AGREES with the statement, including matching numbers and time periods.
+2. If the statement specifies a date (e.g. "as of January 31, 2024" or "during the quarter ended July 31, 2024"), only check the filing for THAT period. Do not compare with newer filings unless the statement says "latest" or "current".
+3. Finding evidence about the same TOPIC but a DIFFERENT specific number or metric is NOT_ENOUGH_INFO, not SUPPORTED.
 
 PASSAGE RULE: The "passage" field must be an EXACT quote copied word-for-word from the filing text you read with read_passage. Never write your own description.
 

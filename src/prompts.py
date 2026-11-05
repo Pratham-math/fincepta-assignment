@@ -17,11 +17,19 @@ TOOL CALL FORMAT (respond with this JSON to call a tool):
 VERDICT FORMAT (respond with this JSON when done):
 {"verdict": "SUPPORTED", "explanation": "brief reason citing the filing", "evidence": [{"filing_id": "10k_fy2024", "page_number": 68, "passage": "exact quote from filing text", "section": "Item 7"}]}
 
-VERDICT RULES:
-- SUPPORTED: filing text confirms the statement.
-- CONTRADICTED: filing text contradicts the statement. A reported LOSS contradicts a claim of positive operating INCOME. A different number for the same metric is CONTRADICTED.
-- OUTDATED: an older filing matches the statement, BUT a newer filing shows a different value for the SAME metric. You MUST search multiple filings and cite evidence from BOTH.
-- NOT_ENOUGH_INFO: the filings simply do not mention the topic. Silence is NOT the same as CONTRADICTED.
+VERDICT RULES — READ CAREFULLY:
+- SUPPORTED: the filing text says the SAME thing as the statement.
+- CONTRADICTED: the filing text says the OPPOSITE of the statement. This includes:
+  * Statement says "X happened" but filing says "X did NOT happen" → CONTRADICTED
+  * Statement says "X did not happen" but filing says "X DID happen" → CONTRADICTED
+  * Statement claims a positive number but filing shows a negative (loss vs income) → CONTRADICTED
+  * Statement claims figure A but filing shows figure B for the same metric → CONTRADICTED
+  * Statement says "paid dividends" but filing says "never declared or paid any cash dividends" → CONTRADICTED
+  * Statement says "no crashes" but filing says "resulted in system crashes" → CONTRADICTED
+- OUTDATED: an older filing matches the statement, BUT a newer filing shows a DIFFERENT value. You MUST search multiple filings and cite evidence from BOTH.
+- NOT_ENOUGH_INFO: the filings simply do not mention the topic at all. Silence is NOT the same as CONTRADICTED.
+
+CRITICAL: Finding a passage about the topic does NOT mean SUPPORTED. You must check whether the passage AGREES with or OPPOSES the statement. If the passage says the opposite of the statement, the verdict is CONTRADICTED, not SUPPORTED.
 
 PASSAGE RULE: The "passage" field must be an EXACT quote copied word-for-word from the filing text you read with read_passage. Never write your own description.
 
@@ -29,15 +37,32 @@ WORKFLOW:
 1. Call search_filings to find relevant pages.
 2. Call read_passage on the best result to get the full text.
 3. For statements about "latest" metrics, also search newer filings to check for updates.
-4. Return verdict JSON with exact quoted passages.
+4. Compare what the passage says against what the statement claims.
+5. Return verdict JSON with exact quoted passages.
 
-EXAMPLE INTERACTION:
+EXAMPLE 1 — SUPPORTED:
 User: Verify: CrowdStrike was founded in 2011. Start by calling search_filings.
 Assistant: {"tool": "search_filings", "args": {"query": "CrowdStrike founded year history", "filing_id": "10k_fy2024"}}
-User: Tool result for search_filings: {"results": [{"passage_id": "10k_fy2024:5", "snippet": "Founded in 2011, CrowdStrike has redefined modern security...", "score": 8.2}]}
+User: Tool result: {"results": [{"passage_id": "10k_fy2024:5", "snippet": "Founded in 2011..."}]}
 Assistant: {"tool": "read_passage", "args": {"passage_id": "10k_fy2024:5"}}
-User: Tool result for read_passage: {"page_number": 5, "text": "Founded in 2011, CrowdStrike has redefined modern security with the world's most advanced cloud-native platform."}
-Assistant: {"verdict": "SUPPORTED", "explanation": "The 10-K explicitly states CrowdStrike was founded in 2011.", "evidence": [{"filing_id": "10k_fy2024", "page_number": 5, "passage": "Founded in 2011, CrowdStrike has redefined modern security with the world's most advanced cloud-native platform.", "section": null}]}
+User: Tool result: {"text": "Founded in 2011, CrowdStrike has redefined modern security..."}
+Assistant: {"verdict": "SUPPORTED", "explanation": "The 10-K states CrowdStrike was founded in 2011.", "evidence": [{"filing_id": "10k_fy2024", "page_number": 5, "passage": "Founded in 2011, CrowdStrike has redefined modern security with the world's most advanced cloud-native platform.", "section": null}]}
+
+EXAMPLE 2 — CONTRADICTED:
+User: Verify: CrowdStrike paid cash dividends on its capital stock during fiscal 2024. Start by calling search_filings.
+Assistant: {"tool": "search_filings", "args": {"query": "cash dividends capital stock", "filing_id": "10k_fy2024"}}
+User: Tool result: {"results": [{"passage_id": "10k_fy2024:63", "snippet": "never declared or paid any cash dividends..."}]}
+Assistant: {"tool": "read_passage", "args": {"passage_id": "10k_fy2024:63"}}
+User: Tool result: {"text": "We have never declared or paid any cash dividends on our capital stock."}
+Assistant: {"verdict": "CONTRADICTED", "explanation": "The filing states CrowdStrike has never declared or paid cash dividends, contradicting the claim that dividends were paid.", "evidence": [{"filing_id": "10k_fy2024", "page_number": 63, "passage": "We have never declared or paid any cash dividends on our capital stock.", "section": "Part II, Item 5"}]}
+
+EXAMPLE 3 — CONTRADICTED (negation):
+User: Verify: The Falcon sensor update on July 19, 2024 did not cause any Windows systems to crash. Start by calling search_filings.
+Assistant: {"tool": "search_filings", "args": {"query": "Falcon sensor July 19 Windows crash"}}
+User: Tool result: {"results": [{"passage_id": "10q_jul2024:24", "snippet": "resulted in system crashes for certain Windows systems..."}]}
+Assistant: {"tool": "read_passage", "args": {"passage_id": "10q_jul2024:24"}}
+User: Tool result: {"text": "On July 19, 2024, the Company released a content configuration update for its Falcon sensor that resulted in system crashes for certain Windows systems."}
+Assistant: {"verdict": "CONTRADICTED", "explanation": "The filing states the update DID result in system crashes, contradicting the claim that it did not cause any crashes.", "evidence": [{"filing_id": "10q_jul2024", "page_number": 24, "passage": "On July 19, 2024, the Company released a content configuration update for its Falcon sensor that resulted in system crashes for certain Windows systems", "section": "8. Commitments and Contingencies"}]}
 """
 
 # No separate few-shot messages needed — examples are in the system prompt

@@ -1,12 +1,16 @@
 """
-llm.py — Thin wrapper around Ollama's OpenAI-compatible API.
+llm.py — LLM wrapper supporting OpenRouter or local Ollama.
 
-Ollama automatically uses GPU if available — no extra config needed.
+Priority:
+  1. If OPENROUTER_API_KEY is set → use OpenRouter
+  2. Otherwise → use local Ollama at localhost:11434
+
 All calls are counted and token usage is tracked here.
 """
 
 import json
 import os
+import re
 from typing import Any
 
 from openai import OpenAI
@@ -15,15 +19,31 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Client setup — points to local Ollama instance
+# Client setup
 # ---------------------------------------------------------------------------
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
-_client = OpenAI(
-    base_url=OLLAMA_BASE_URL,
-    api_key="ollama",  # Ollama doesn't need a real key
-)
+if OPENROUTER_API_KEY:
+    _client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+    )
+    _model = OPENROUTER_MODEL
+    _provider = "openrouter"
+else:
+    _client = OpenAI(
+        base_url=OLLAMA_BASE_URL,
+        api_key="ollama",
+    )
+    _model = OLLAMA_MODEL
+    _provider = "ollama"
+
+print(f"[llm] Using {_provider}: {_model}")
 
 # ---------------------------------------------------------------------------
 # Usage counters
@@ -36,66 +56,74 @@ _usage: dict[str, int] = {
 
 
 def reset_usage() -> None:
-    """Reset LLM usage counters to zero."""
     for k in _usage:
         _usage[k] = 0
 
 
 def get_usage() -> dict[str, int]:
-    """Return a copy of current LLM usage counters."""
     return dict(_usage)
 
 
 # ---------------------------------------------------------------------------
-# Core call function
+# Core call
 # ---------------------------------------------------------------------------
 def call_llm(
     messages: list[dict],
-    tools: list[dict] | None = None,  # kept for API compatibility, ignored
+    tools: list[dict] | None = None,   # kept for API compat, ignored
     temperature: float = 0.0,
 ) -> dict[str, Any]:
     """
-    Call the Ollama LLM and return a structured response.
+    Call the LLM and return a structured response.
 
-    We use plain text responses (no OpenAI function-calling) because
-    local models like qwen2.5:7b are more reliable with JSON-in-text
-    than with the OpenAI tools API format.
-
-    The model is instructed to output either:
-      {"tool": "name", "args": {...}}   — tool call
-      {"verdict": ..., ...}             — final verdict
-
-    Args:
-        messages:    List of {"role": ..., "content": ...} dicts
-        tools:       Ignored (kept for API compat)
-        temperature: Sampling temperature (0 = deterministic)
+    We use plain text responses (JSON-in-text) because it works reliably
+    with both local and cloud models without requiring native tool-calling.
 
     Returns:
         {
-            "content": str,              # raw text from the model
-            "tool_call": {               # parsed if model wants a tool
-                "name": str,
-                "arguments": dict
-            } or None,
-            "raw": the full OpenAI response object
+            "content": str,
+            "tool_call": {"name": str, "arguments": dict} | None,
+            "raw": response object
         }
     """
     _usage["llm_calls"] += 1
 
-    response = _client.chat.completions.create(
-        model=OLLAMA_MODEL,
-        messages=messages,
-        temperature=temperature,
-    )
+    # OpenRouter requires these headers for ranking/attribution
+    extra_headers = {}
+    if _provider == "openrouter":
+        extra_headers = {
+            "HTTP-Referer": "https://github.com/Pratham-math/fincepta-assignment",
+            "X-Title": "Filing Fact-Checker",
+        }
 
-    # Track token usage
+    # Retry on rate limit (429) with exponential backoff
+    import time as _time
+    max_retries = 4
+    for attempt in range(max_retries):
+        try:
+            response = _client.chat.completions.create(
+                model=_model,
+                messages=messages,
+                temperature=temperature,
+                extra_headers=extra_headers if extra_headers else None,
+            )
+            break
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)  # 2, 4, 8 seconds
+                print(f"  [llm] Rate limited, waiting {wait}s (attempt {attempt+1}/{max_retries})...")
+                _time.sleep(wait)
+            else:
+                raise
+
     if response.usage:
-        _usage["input_tokens"] += response.usage.prompt_tokens or 0
+        _usage["input_tokens"]  += response.usage.prompt_tokens or 0
         _usage["output_tokens"] += response.usage.completion_tokens or 0
 
     content = response.choices[0].message.content or ""
 
-    # Try to detect a tool call in the response
+    # Strip <think>...</think> blocks that some models emit before their JSON
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
     tool_call = _parse_tool_call(content)
 
     return {
@@ -106,46 +134,39 @@ def call_llm(
 
 
 def _parse_tool_call(text: str) -> dict | None:
-    """
-    Check if the model's text response is a tool call JSON.
-    Returns {"name": ..., "arguments": ...} or None.
-    """
+    """Detect a tool call JSON in the model's text response."""
     data = extract_json(text)
     if data and "tool" in data and "args" in data:
-        return {
-            "name": data["tool"],
-            "arguments": data["args"],
-        }
+        return {"name": data["tool"], "arguments": data["args"]}
     return None
 
 
 def extract_json(text: str) -> dict | None:
     """
-    Try to extract a JSON object from a text response.
+    Extract a JSON object from text. Handles markdown code fences.
     Returns None if no valid JSON found.
-    Handles cases where the model wraps JSON in markdown code blocks.
     """
     if not text:
         return None
 
-    # Strip markdown code fences if present
     text = text.strip()
+
+    # Strip markdown fences
     if text.startswith("```"):
         lines = text.split("\n")
-        # Remove first and last fence lines
-        inner = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
-        text = inner.strip()
+        end = -1 if lines[-1].strip() == "```" else len(lines)
+        text = "\n".join(lines[1:end]).strip()
 
-    # Try direct parse first
+    # Direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Try to find JSON object within the text
+    # Find outermost JSON object
     start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
+    end   = text.rfind("}")
+    if start != -1 and end > start:
         try:
             return json.loads(text[start:end + 1])
         except json.JSONDecodeError:

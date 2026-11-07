@@ -1,0 +1,198 @@
+[
+  {
+    "group": "G1_ARR",
+    "description": "ARR metric — first statement seeds memory with the ARR page, second reuses it",
+    "statements": [
+      {
+        "id": "m01",
+        "order": 1,
+        "statement": "CrowdStrike's annual recurring revenue was approximately $3.44 billion as of January 31, 2024.",
+        "expected_verdict": "SUPPORTED",
+        "filing_id": "10k_fy2024",
+        "page_hint": "p66, Key Metrics",
+        "proof_quote": "Annual recurring revenue $ 3,435,150",
+        "memory_role": "seeder",
+        "notes": "Seeds ARR entity triple (CrowdStrike --[arr_jan2024]--> 3,435,150 thousand)"
+      },
+      {
+        "id": "m02",
+        "order": 2,
+        "statement": "CrowdStrike's annual recurring revenue was approximately $3.06 billion as of January 31, 2024.",
+        "expected_verdict": "CONTRADICTED",
+        "filing_id": "10k_fy2024",
+        "page_hint": "p66, Key Metrics",
+        "proof_quote": "Annual recurring revenue $ 3,435,150",
+        "memory_role": "beneficiary",
+        "notes": "Should recall ARR triple from m01 memory and immediately know the correct value is $3.44B not $3.06B. Expect fewer tool calls than m01."
+      }
+    ]
+  },
+  {
+    "group": "G2_REVENUE",
+    "description": "Total revenue — seed with FY2024 revenue, then test a confused quarterly figure",
+    "statements": [
+      {
+        "id": "m03",
+        "order": 1,
+        "statement": "CrowdStrike generated approximately $3.06 billion in total revenue in fiscal 2024.",
+        "expected_verdict": "SUPPORTED",
+        "filing_id": "10k_fy2024",
+        "page_hint": "p69, Results of Operations",
+        "proof_quote": "Total revenue $ 3,055,555",
+        "memory_role": "seeder",
+        "notes": "Seeds total_revenue_FY2024 triple"
+      },
+      {
+        "id": "m04",
+        "order": 2,
+        "statement": "CrowdStrike generated approximately $2.90 billion in revenue during the three months ended October 31, 2024.",
+        "expected_verdict": "CONTRADICTED",
+        "filing_id": "10q_oct2024",
+        "page_hint": "p47, Results of Operations",
+        "proof_quote": "Total revenue $ 1,010,178",
+        "memory_role": "different_filing",
+        "notes": "Different period — should NOT be confused with FY2024 revenue from memory. Tests that memory doesn't cause false matches across periods."
+      }
+    ]
+  },
+  {
+    "group": "G3_FALCON_INCIDENT",
+    "description": "Falcon incident — positive then negative version of the same claim",
+    "statements": [
+      {
+        "id": "m05",
+        "order": 1,
+        "statement": "A Falcon sensor content configuration update released on July 19, 2024 caused certain Windows systems to crash.",
+        "expected_verdict": "SUPPORTED",
+        "filing_id": "10q_jul2024",
+        "page_hint": "p24, Note 8",
+        "proof_quote": "the Company released a content configuration update for its Falcon sensor that resulted in system crashes for certain Windows systems",
+        "memory_role": "seeder",
+        "notes": "Seeds security_incident triple with Falcon/crash keywords in passage"
+      },
+      {
+        "id": "m06",
+        "order": 2,
+        "statement": "The Falcon sensor update released on July 19, 2024 did not cause any Windows systems to crash.",
+        "expected_verdict": "CONTRADICTED",
+        "filing_id": "10q_jul2024",
+        "page_hint": "p24, Note 8",
+        "proof_quote": "resulted in system crashes for certain Windows systems",
+        "memory_role": "beneficiary",
+        "notes": "Opposite of m05 — memory should surface the crash passage immediately. Model should detect negation. Fewer tool calls expected."
+      }
+    ]
+  },
+  {
+    "group": "G4_OUTDATED_ARR",
+    "description": "OUTDATED scenario — seed with old ARR, then test a 'latest' claim",
+    "statements": [
+      {
+        "id": "m07",
+        "order": 1,
+        "statement": "CrowdStrike's annual recurring revenue was $3,435,150 thousand as of January 31, 2024.",
+        "expected_verdict": "SUPPORTED",
+        "filing_id": "10k_fy2024",
+        "page_hint": "p66, Key Metrics",
+        "proof_quote": "Annual recurring revenue $ 3,435,150",
+        "memory_role": "seeder",
+        "notes": "Seeds ARR triple for Jan 2024 value"
+      },
+      {
+        "id": "m08",
+        "order": 2,
+        "statement": "CrowdStrike's latest reported annual recurring revenue stands at approximately $3.44 billion.",
+        "expected_verdict": "OUTDATED",
+        "filing_id": "10k_fy2024,10q_oct2024",
+        "page_hint": "10-K p66 and 10-Q Oct p42",
+        "proof_quote": "Annual recurring revenue $ 4,017,540",
+        "memory_role": "beneficiary",
+        "notes": "Memory has old ARR ($3.44B). But 'latest' requires checking newer filing. Should find $4.02B in 10q_oct2024 and return OUTDATED. Tests memory doesn't prevent correct OUTDATED detection."
+      }
+    ]
+  },
+  {
+    "group": "G5_EMPLOYEES",
+    "description": "Employee headcount — seed then reuse",
+    "statements": [
+      {
+        "id": "m09",
+        "order": 1,
+        "statement": "CrowdStrike employed 7,925 full-time employees as of January 31, 2024.",
+        "expected_verdict": "SUPPORTED",
+        "filing_id": "10k_fy2024",
+        "page_hint": "p21, Human Capital Resources",
+        "proof_quote": "As of January 31, 2024, we had 7,925 full-time employees.",
+        "memory_role": "seeder",
+        "notes": "Seeds employees_jan2024 triple"
+      },
+      {
+        "id": "m10",
+        "order": 2,
+        "statement": "CrowdStrike had more than 10,000 employees as of January 31, 2024.",
+        "expected_verdict": "CONTRADICTED",
+        "filing_id": "10k_fy2024",
+        "page_hint": "p21, Human Capital Resources",
+        "proof_quote": "As of January 31, 2024, we had 7,925 full-time employees.",
+        "memory_role": "beneficiary",
+        "notes": "Memory has 7,925 employees. Statement claims 10,000+. Should recall employee triple and return CONTRADICTED without searching."
+      }
+    ]
+  },
+  {
+    "group": "G6_UNRELATED",
+    "description": "Memory isolation — statements that should NOT benefit from each other",
+    "statements": [
+      {
+        "id": "m11",
+        "order": 1,
+        "statement": "CrowdStrike paid cash dividends on its capital stock during fiscal 2024.",
+        "expected_verdict": "CONTRADICTED",
+        "filing_id": "10k_fy2024",
+        "page_hint": "p63, Item 5",
+        "proof_quote": "We have never declared or paid any cash dividends on our capital stock.",
+        "memory_role": "seeder",
+        "notes": "Seeds dividend triple. Unrelated to revenue or incident."
+      },
+      {
+        "id": "m12",
+        "order": 2,
+        "statement": "CrowdStrike achieved a customer net promoter score of 75 in fiscal 2024.",
+        "expected_verdict": "NOT_ENOUGH_INFO",
+        "filing_id": "10k_fy2024",
+        "page_hint": "No proving page",
+        "proof_quote": "",
+        "memory_role": "isolated",
+        "notes": "Should return NOT_ENOUGH_INFO. Memory from m11 (dividends) should NOT appear in recall for NPS query. Tests memory isolation between unrelated topics."
+      }
+    ]
+  },
+  {
+    "group": "G7_DELTA_LAWSUIT",
+    "description": "Delta lawsuit — seed with incident details, then test lawsuit claim",
+    "statements": [
+      {
+        "id": "m13",
+        "order": 1,
+        "statement": "A Falcon sensor content configuration update released on July 19, 2024 caused certain Windows systems to crash.",
+        "expected_verdict": "SUPPORTED",
+        "filing_id": "10q_jul2024",
+        "page_hint": "p24, Note 8",
+        "proof_quote": "resulted in system crashes for certain Windows systems",
+        "memory_role": "seeder",
+        "notes": "Seeds incident memory"
+      },
+      {
+        "id": "m14",
+        "order": 2,
+        "statement": "Delta Air Lines sued CrowdStrike, Inc. in Georgia state court on October 25, 2024 over the July 19 incident.",
+        "expected_verdict": "SUPPORTED",
+        "filing_id": "10q_oct2024",
+        "page_hint": "p32, Note 8",
+        "proof_quote": "Delta Airlines, Inc. filed a complaint against CrowdStrike, Inc. in the Superior Court for Fulton County, Georgia",
+        "memory_role": "partial_beneficiary",
+        "notes": "Incident context in memory may help, but Delta lawsuit evidence needs a new search in 10q_oct2024. Tests that memory helps with topic context without replacing the need for fresh evidence."
+      }
+    ]
+  }
+]

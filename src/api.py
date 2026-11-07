@@ -36,6 +36,7 @@ app.add_middleware(
 class CheckRequest(BaseModel):
     statement: str
     use_decomposer: bool = True
+    use_memory: bool = False
 
 
 class BatchRequest(BaseModel):
@@ -46,16 +47,13 @@ class BatchRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Streaming helper
 # ---------------------------------------------------------------------------
-async def _stream_check(statement: str, use_decomposer: bool) -> AsyncGenerator[str, None]:
+async def _stream_check(statement: str, use_decomposer: bool, use_memory: bool) -> AsyncGenerator[str, None]:
     """Yield newline-delimited JSON events from the agent."""
     try:
-        for event in run_check_stream(statement, use_decomposer=use_decomposer):
+        for event in run_check_stream(statement, use_decomposer=use_decomposer, use_memory=use_memory):
             yield json.dumps(event, ensure_ascii=False) + "\n"
     except Exception as e:
-        error_event = {
-            "type": "error",
-            "detail": str(e),
-        }
+        error_event = {"type": "error", "detail": str(e)}
         yield json.dumps(error_event) + "\n"
 
 
@@ -65,6 +63,19 @@ async def _stream_check(statement: str, use_decomposer: bool) -> AsyncGenerator[
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/memory/stats")
+def memory_stats():
+    from src.memory import get_stats
+    return get_stats()
+
+
+@app.post("/memory/clear")
+def memory_clear():
+    from src.memory import clear_memory
+    clear_memory()
+    return {"status": "cleared"}
 
 
 @app.post("/check")
@@ -81,7 +92,7 @@ async def check(req: CheckRequest):
         raise HTTPException(status_code=400, detail="statement must not be empty")
 
     return StreamingResponse(
-        _stream_check(req.statement.strip(), req.use_decomposer),
+        _stream_check(req.statement.strip(), req.use_decomposer, req.use_memory),
         media_type="application/x-ndjson",
     )
 

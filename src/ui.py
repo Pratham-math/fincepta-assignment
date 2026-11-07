@@ -37,6 +37,8 @@ with st.sidebar:
     st.header("Settings")
     use_decomposer = st.toggle("Use Decomposer", value=True,
                                 help="Run claim decomposition before the executor.")
+    use_memory = st.toggle("Use Memory", value=False,
+                            help="Recall previously found passages and store new ones.")
     st.divider()
     st.markdown("**Filings indexed:**")
     st.markdown("- 10-K FY2024 (Jan 31 2024)")
@@ -44,6 +46,16 @@ with st.sidebar:
     st.markdown("- 10-Q Q3FY2025 (Oct 31 2024)")
     st.divider()
     st.markdown("**API:** `localhost:8000`")
+    # Memory stats
+    try:
+        resp = httpx.get(f"{API_URL}/memory/stats", timeout=2)
+        if resp.status_code == 200:
+            stats = resp.json()
+            st.divider()
+            st.markdown("**Memory:**")
+            st.markdown(f"- Stored passages: {stats.get('stored_passages', 0)}")
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Verdict styling
@@ -79,11 +91,12 @@ def render_verdict(verdict: str, explanation: str, evidence: list, usage: dict, 
             with st.expander(f"[{i}] {ev.get('filing_id','?')} — page {ev.get('page_number','?')}  |  {ev.get('section') or ''}"):
                 st.markdown(f"> {ev.get('passage','')}")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("LLM calls", usage.get("llm_calls", 0))
     col2.metric("Tool calls", usage.get("tool_calls", 0))
     col3.metric("Tokens in", usage.get("input_tokens", 0))
     col4.metric("Tokens out", usage.get("output_tokens", 0))
+    col5.metric("Memory hits", usage.get("memory_hits", 0))
 
     if finish_reason == "step_limit":
         st.warning("⚠️ Agent reached step limit — verdict may be incomplete.")
@@ -94,7 +107,7 @@ def stream_and_render(statement: str, log_container, result_container):
     steps_log = []
     result_data = None
 
-    payload = {"statement": statement, "use_decomposer": use_decomposer}
+    payload = {"statement": statement, "use_decomposer": use_decomposer, "use_memory": use_memory}
 
     try:
         with httpx.stream("POST", f"{API_URL}/check", json=payload, timeout=300) as r:

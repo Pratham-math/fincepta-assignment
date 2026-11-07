@@ -22,7 +22,6 @@ from src.llm import call_llm, extract_json, get_usage, reset_usage
 from src.tools import run_tool, get_counters, reset_counters
 from src.schemas import Verdict, FinishReason, Evidence, Usage, VerificationResult
 from src.numeric import figures_agree, extract_figures_from_text
-
 MAX_STEPS = int(os.getenv("MAX_EXECUTOR_STEPS", "7"))
 
 
@@ -128,7 +127,6 @@ def executor_node(state: AgentState) -> dict:
     if not user_msgs:
         decomposition = state.get("decomposition")
         first_user = _build_initial_messages(state["statement"], decomposition)
-        # Replace plain_messages with the enriched version
         plain_messages = first_user
 
     response = call_llm(messages=plain_messages, temperature=0.0)
@@ -332,12 +330,31 @@ def _is_valid_verdict(data: dict) -> bool:
     )
 
 
-def _build_initial_messages(statement: str, decomposition: dict | None) -> list[dict]:
-    """Build the executor's initial message list, optionally enriched by decomposition."""
+def _build_initial_messages(
+    statement: str,
+    decomposition: dict | None,
+    recalled: list[dict] | None = None,
+) -> list[dict]:
+    """Build the executor's initial message list, optionally enriched by decomposition and memory."""
     context = ""
+
+    # --- Memory recall context ---
+    if recalled:
+        context += "\n\nPreviously found relevant evidence (from memory — verify before using):\n"
+        for i, mem in enumerate(recalled, 1):
+            context += (
+                f"{i}. [{mem['filing_id']} p{mem['page_number']}] "
+                f"Summary: {mem['summary']}\n"
+                f"   Passage: {mem['passage'][:200]}\n"
+            )
+        context += (
+            "Use these passages if they directly support your verdict, "
+            "but still search for additional evidence to confirm.\n"
+        )
+
     if decomposition and not decomposition.get("_fallback"):
         filings = decomposition.get("relevant_filings", [])
-        context = (
+        context += (
             f"\n\nClaim analysis:\n"
             f"- Topic: {decomposition.get('topic', '')}\n"
             f"- Time scope: {decomposition.get('time_scope', 'not specified')}\n"
@@ -345,7 +362,6 @@ def _build_initial_messages(statement: str, decomposition: dict | None) -> list[
             f"- Suggested search terms: {', '.join(decomposition.get('search_terms', []))}\n"
             f"- Filings to check: {', '.join(filings)}\n"
         )
-        # Explicit multi-filing instruction when needed
         if len(filings) > 1:
             context += (
                 f"\nIMPORTANT: Search ALL of these filings: {', '.join(filings)}. "
@@ -355,7 +371,6 @@ def _build_initial_messages(statement: str, decomposition: dict | None) -> list[
 
     # Add hint for "latest" statements — but NOT for specific dated claims
     stmt_lower = statement.lower()
-    # "as of January 31, 2024" is a dated claim, NOT a "latest" claim
     latest_keywords = ["latest", "current", "most recent", "stands at", "is now"]
     has_specific_date = bool(__import__("re").search(r"as of\s+\w+ \d{1,2},?\s+\d{4}", stmt_lower))
     if any(w in stmt_lower for w in latest_keywords) and not has_specific_date:
@@ -412,7 +427,7 @@ _GRAPH_WITH_DECOMP = _build_graph(with_decomposer=True)
 def run_check(
     statement: str,
     use_decomposer: bool = True,
-    use_memory: bool = False,   # Phase 5
+    use_memory: bool = False,
 ) -> VerificationResult:
     """
     Check a statement against the filings.
@@ -420,7 +435,7 @@ def run_check(
     Args:
         statement:      The claim to verify
         use_decomposer: Run Decomposer before Executor (default True)
-        use_memory:     Use evidence memory cache (Phase 5, default False)
+        use_memory:     Use evidence memory — recall before, store after (default False)
 
     Returns:
         VerificationResult
@@ -428,11 +443,16 @@ def run_check(
     reset_usage()
     reset_counters()
 
+    if use_memory:
+        from src.memory import recall, store, reset_session_stats
+        reset_session_stats()
+        recalled = recall(statement, top_k=3)
+    else:
+        recalled = []
+
     graph = _GRAPH_WITH_DECOMP if use_decomposer else _GRAPH_NO_DECOMP
 
-    # For graphs without decomposer we seed decomposition as None
-    # and build messages directly
-    initial_messages = _build_initial_messages(statement, decomposition=None)
+    initial_messages = _build_initial_messages(statement, decomposition=None, recalled=recalled)
 
     initial_state: AgentState = {
         "statement": statement,
@@ -444,19 +464,24 @@ def run_check(
         "error": None,
     }
 
-    # For the decomposer graph, the decomposer_node will fill decomposition,
-    # but executor needs messages built AFTER decomposition.
-    # We handle this by having executor_node enrich the first user message
-    # when it sees a decomposition in state.
     if use_decomposer:
-        # Start with minimal messages — executor_node will rebuild after decompose
         initial_state["messages"] = [
             {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
         ]
 
     final_state = graph.invoke(initial_state)
+    result = _build_result(statement, final_state)
 
-    return _build_result(statement, final_state)
+    # Store evidence after a confident verdict
+    if use_memory and result.finish_reason == FinishReason.CONFIDENT and result.evidence:
+        from src.memory import store, get_stats
+        stored = store(result.evidence, statement)
+        # Update memory_hits in usage
+        from src.memory import get_stats
+        stats = get_stats()
+        result.usage.memory_hits = stats["session_hits"]
+
+    return result
 
 
 FILING_ORDER = ["10k_fy2024", "10q_jul2024", "10q_oct2024"]
@@ -633,23 +658,26 @@ def _build_result(statement: str, final_state: dict) -> VerificationResult:
     )
 
 
-def run_check_stream(statement: str, use_decomposer: bool = True):
+def run_check_stream(statement: str, use_decomposer: bool = True, use_memory: bool = False):
     """
     Generator that yields step events as the agent works, then the final result.
-
-    Yields dicts:
-      {"type": "step",   "step": N, "action": str, "detail": str}
-      {"type": "result", "data": VerificationResult.model_dump()}
     """
     reset_usage()
     reset_counters()
+
+    if use_memory:
+        from src.memory import recall, reset_session_stats
+        reset_session_stats()
+        recalled = recall(statement, top_k=3)
+    else:
+        recalled = []
 
     graph = _GRAPH_WITH_DECOMP if use_decomposer else _GRAPH_NO_DECOMP
 
     if use_decomposer:
         initial_messages = [{"role": "system", "content": EXECUTOR_SYSTEM_PROMPT}]
     else:
-        initial_messages = _build_initial_messages(statement, decomposition=None)
+        initial_messages = _build_initial_messages(statement, decomposition=None, recalled=recalled)
 
     initial_state: AgentState = {
         "statement": statement,
@@ -708,5 +736,5 @@ def run_check_stream(statement: str, use_decomposer: bool = True):
                     "detail": content[:120] if content else "",
                 }
 
-    result = run_check(statement, use_decomposer=use_decomposer)
+    result = run_check(statement, use_decomposer=use_decomposer, use_memory=use_memory)
     yield {"type": "result", "data": result.model_dump()}
